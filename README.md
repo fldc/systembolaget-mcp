@@ -124,17 +124,21 @@ Add this configuration to your Claude Desktop config file:
 
 #### Standalone Testing
 
-Run the server directly:
+**Important:** MCP servers communicate via JSON-RPC protocol. You cannot send plain text directly to the server.
 
-**With uv:**
+**Quick Test (Recommended):**
 ```bash
+# Test the server functions directly
+uv run test_server.py
+```
+
+**Run as MCP Server:**
+```bash
+# This starts the JSON-RPC server (waits for JSON-RPC messages via stdin)
 uv run systembolaget_mcp.py
 ```
 
-**With Python:**
-```bash
-python systembolaget_mcp.py
-```
+For detailed testing instructions, see [TESTING.md](TESTING.md).
 
 ### Example Queries
 
