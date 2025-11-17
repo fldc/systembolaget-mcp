@@ -9,7 +9,7 @@ description = "A Model Context Protocol server for interacting with Systembolage
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Fredrik Storm", email = "fredrik@fldc.se" }
 ]
 license = { text = "MIT" }
 keywords = ["mcp", "systembolaget", "api", "llm"]
