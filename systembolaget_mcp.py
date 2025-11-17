@@ -215,28 +215,43 @@ def format_store_markdown(store: dict) -> str:
     Returns:
         str: Formatted markdown string
     """
-    name = store.get('name', 'Unknown')
+    name = store.get('displayName', store.get('alias', 'Unknown'))
     store_id = store.get('siteId', 'N/A')
-    address = store.get('address', {})
+    street = store.get('streetAddress', '')
+    city = store.get('city', '')
+    postal_code = store.get('postalCode', '')
 
     md = f"### {name}\n\n"
     md += f"- **Store ID:** {store_id}\n"
 
-    if address:
-        street = address.get('street', '')
-        city = address.get('city', '')
-        postal_code = address.get('postalCode', '')
-        if street:
-            md += f"- **Address:** {street}, {postal_code} {city}\n"
+    if street:
+        address_parts = [street]
+        if postal_code:
+            address_parts.append(postal_code)
+        if city:
+            address_parts.append(city)
+        md += f"- **Address:** {' '.join(address_parts)}\n"
 
-    if 'phone' in store:
-        md += f"- **Phone:** {store['phone']}\n"
+    if store.get('isAgent'):
+        md += f"- **Type:** Agent\n"
+    if store.get('isTastingStore'):
+        md += f"- **Features:** Tasting Store\n"
 
-    # Opening hours if available
-    if 'openingHours' in store:
-        md += "\n**Opening Hours:**\n"
-        for day, hours in store['openingHours'].items():
-            md += f"- {day}: {hours}\n"
+    # Opening hours - show today's hours
+    if 'openingHours' in store and len(store['openingHours']) > 0:
+        # Find today's hours (usually second entry is today)
+        for day_info in store['openingHours'][:3]:  # Check first few days
+            if day_info.get('openFrom') != '00:00:00':
+                open_from = day_info.get('openFrom', '')[:5]  # HH:MM
+                open_to = day_info.get('openTo', '')[:5]
+                md += f"- **Hours:** {open_from} - {open_to}\n"
+                break
+
+    if 'position' in store:
+        lat = store['position'].get('latitude')
+        lon = store['position'].get('longitude')
+        if lat and lon:
+            md += f"- **Location:** {lat:.4f}, {lon:.4f}\n"
 
     return md
 
@@ -557,50 +572,58 @@ async def search_stores(params: SearchStoresInput) -> str:
         api_key = await extract_api_key()
 
         headers = {
-            'Ocp-Apim-Subscription-Key': api_key
+            'Ocp-Apim-Subscription-Key': api_key,
+            'Origin': 'https://www.systembolaget.se'
         }
 
         query_params = {
-            'page': params.offset // params.limit,
-            'pageSize': params.limit
+            'includePredictions': 'true'
         }
 
+        # Combine query and city into single search term
+        search_terms = []
         if params.query:
-            query_params['searchQuery'] = params.query
+            search_terms.append(params.query)
         if params.city:
-            query_params['city'] = params.city
+            search_terms.append(params.city)
 
-        url = f"{SYSTEMBOLAGET_API_BASE}/site/search"
+        if search_terms:
+            query_params['q'] = ' '.join(search_terms)
+
+        url = f"{SYSTEMBOLAGET_API_BASE}/sitesearch/site"
         data = await make_api_request(url, params=query_params, headers=headers)
 
-        stores = data.get('sites', [])
-        total_count = data.get('metadata', {}).get('totalCount', len(stores))
+        stores = data.get('siteSearchResults', [])
+
+        # Apply pagination manually since API doesn't support it
+        total_count = len(stores)
+        paginated_stores = stores[params.offset:params.offset + params.limit]
 
         if params.format == "json":
             import json
             result = {
-                'stores': stores[:params.limit],
+                'stores': paginated_stores,
                 'pagination': {
                     'limit': params.limit,
                     'offset': params.offset,
                     'total_count': total_count,
-                    'has_more': params.offset + len(stores) < total_count
+                    'has_more': params.offset + params.limit < total_count
                 }
             }
             return truncate_response(json.dumps(result, indent=2, ensure_ascii=False))
 
         # Markdown format
-        if not stores:
+        if not paginated_stores:
             return "No stores found matching your criteria."
 
         result = f"# Store Search Results\n\n"
-        result += f"Found {total_count} stores (showing {len(stores[:params.limit])})\n\n"
+        result += f"Found {total_count} stores (showing {len(paginated_stores)})\n\n"
 
-        for store in stores[:params.limit]:
+        for store in paginated_stores:
             result += format_store_markdown(store) + "\n\n"
 
         # Pagination info
-        if params.offset + len(stores) < total_count:
+        if params.offset + params.limit < total_count:
             next_offset = params.offset + params.limit
             result += f"\n---\n**More results available.** Use `offset: {next_offset}` to see the next page.\n"
 
@@ -612,10 +635,12 @@ async def search_stores(params: SearchStoresInput) -> str:
         return f"❌ Unexpected error: {str(e)}"
 
 
-@mcp.tool(
-    name="systembolaget_get_store",
-    annotations={"readOnlyHint": True}
-)
+# Note: Individual store lookup endpoint not available in current API
+# Keeping function for potential future use or if endpoint becomes available
+# @mcp.tool(
+#     name="systembolaget_get_store",
+#     annotations={"readOnlyHint": True}
+# )
 async def get_store(params: GetStoreInput) -> str:
     """Get detailed information about a specific store.
 

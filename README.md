@@ -18,13 +18,8 @@ A Model Context Protocol (MCP) server for interacting with Systembolaget's APIs.
 
 3. **systembolaget_search_stores** - Search for Systembolaget stores
    - Find stores by name or city
+   - Shows store location, opening hours, and coordinates
    - Pagination support
-   - Returns addresses and contact information
-
-4. **systembolaget_get_store** - Get detailed information about a specific store
-   - Complete store details
-   - Opening hours
-   - Available services and parking information
 
 ## Installation
 
@@ -209,21 +204,6 @@ Search for stores by name or location.
 {
   "city": "Stockholm",
   "limit": 5
-}
-```
-
-### systembolaget_get_store
-
-Get detailed information about a specific store.
-
-**Parameters:**
-- `store_id` (required): The store ID (site ID)
-- `format` (optional): Response format - 'markdown' or 'json' (default: 'markdown')
-
-**Example:**
-```json
-{
-  "store_id": "0123"
 }
 ```
 
