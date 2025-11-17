@@ -31,28 +31,34 @@ A Model Context Protocol (MCP) server for interacting with Systembolaget's APIs.
 ### Prerequisites
 
 - Python 3.10 or higher
+- [uv](https://github.com/astral-sh/uv) - Fast Python package installer
 
 **Note:** No API key required! The server automatically extracts the API key from Systembolaget's website.
 
-### Setup
+### Setup with uv (Recommended)
 
-1. Clone this repository:
+1. Install uv if you haven't already:
 ```bash
-git clone https://github.com/yourusername/systembolaget-mcp.git
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. Clone this repository:
+```bash
+git clone https://github.com/fldc/systembolaget-mcp.git
 cd systembolaget-mcp
 ```
 
-2. Install dependencies:
+3. Install dependencies:
 ```bash
-pip install -e .
+uv sync
 ```
 
-Or install development dependencies:
+Or install with development dependencies:
 ```bash
-pip install -e ".[dev]"
+uv sync --all-extras
 ```
 
-3. (Optional) Configure a custom API key:
+4. (Optional) Configure a custom API key:
 ```bash
 export SYSTEMBOLAGET_API_KEY="your-api-key-here"
 ```
@@ -63,6 +69,16 @@ SYSTEMBOLAGET_API_KEY=your-api-key-here
 ```
 
 **The API key is optional.** If not provided, the server will automatically extract it from Systembolaget's website.
+
+### Alternative: Setup with pip
+
+If you prefer using pip:
+
+```bash
+pip install -e .
+# Or with dev dependencies:
+pip install -e ".[dev]"
+```
 
 ## Usage
 
@@ -75,6 +91,24 @@ Add this configuration to your Claude Desktop config file:
 **MacOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows**: `%APPDATA%/Claude/claude_desktop_config.json`
 
+**Using uv (Recommended):**
+```json
+{
+  "mcpServers": {
+    "systembolaget": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/systembolaget-mcp",
+        "run",
+        "systembolaget_mcp.py"
+      ]
+    }
+  }
+}
+```
+
+**Using Python directly:**
 ```json
 {
   "mcpServers": {
@@ -91,6 +125,13 @@ Add this configuration to your Claude Desktop config file:
 #### Standalone Testing
 
 Run the server directly:
+
+**With uv:**
+```bash
+uv run systembolaget_mcp.py
+```
+
+**With Python:**
 ```bash
 python systembolaget_mcp.py
 ```
@@ -186,26 +227,65 @@ Get detailed information about a specific store.
 
 ### Running Tests
 
+**With uv:**
+```bash
+uv run pytest
+```
+
+**With pip/venv:**
 ```bash
 pytest
 ```
 
 ### Code Formatting
 
+**With uv:**
+```bash
+uv run black systembolaget_mcp.py
+```
+
+**With pip/venv:**
 ```bash
 black systembolaget_mcp.py
 ```
 
 ### Type Checking
 
+**With uv:**
+```bash
+uv run mypy systembolaget_mcp.py
+```
+
+**With pip/venv:**
 ```bash
 mypy systembolaget_mcp.py
 ```
 
 ### Linting
 
+**With uv:**
 ```bash
-ruff systembolaget_mcp.py
+uv run ruff check systembolaget_mcp.py
+```
+
+**With pip/venv:**
+```bash
+ruff check systembolaget_mcp.py
+```
+
+### Adding Dependencies
+
+**With uv:**
+```bash
+uv add <package-name>
+# For dev dependencies:
+uv add --dev <package-name>
+```
+
+**With pip:**
+```bash
+# Edit pyproject.toml manually, then:
+pip install -e ".[dev]"
 ```
 
 ## API Key Extraction
