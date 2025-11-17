@@ -91,11 +91,11 @@ echo '{
 
 ## Common Issues
 
-### ❌ "validation errors for JSONRPCMessage"
+### "validation errors for JSONRPCMessage"
 
 This means you tried to send plain text to the server instead of JSON-RPC messages. Use one of the testing methods above instead.
 
-### ❌ "Could not find API key in app bundle"
+### "Could not find API key in app bundle"
 
 The server couldn't extract the API key from Systembolaget's website. This can happen if:
 - Systembolaget's website structure changed
@@ -107,7 +107,7 @@ Solution: Set a manual API key:
 export SYSTEMBOLAGET_API_KEY="your-key"
 ```
 
-### ❌ "Resource not found" or 404 errors
+### "Resource not found" or 404 errors
 
 The API endpoint might have changed or the product/store ID doesn't exist. Check the Systembolaget API documentation for the correct endpoints.
 
