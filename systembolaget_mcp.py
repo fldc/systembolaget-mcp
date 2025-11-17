@@ -33,46 +33,14 @@ API_KEY_CACHE_DURATION = 3600  # 1 hour in seconds
 SYSTEMBOLAGET_API_BASE = "https://api-extern.systembolaget.se/sb-api-ecommerce/v1"
 SYSTEMBOLAGET_WEBSITE = "https://www.systembolaget.se"
 
-# Cached API key and HTTP client
+# Cached API key
 _cached_api_key: Optional[str] = None
 _api_key_timestamp: Optional[float] = None
-_http_client: Optional[httpx.AsyncClient] = None
 
 
 class APIError(Exception):
     """Custom exception for API errors"""
     pass
-
-
-async def get_http_client() -> httpx.AsyncClient:
-    """Get or create a shared HTTP client for reuse.
-
-    Returns:
-        httpx.AsyncClient: Shared async HTTP client
-    """
-    import asyncio
-    global _http_client
-
-    # Check if client exists and is still valid for current event loop
-    if _http_client is not None:
-        try:
-            # Check if client is closed or tied to a different/closed event loop
-            if _http_client.is_closed:
-                _http_client = None
-            else:
-                # Try to verify the client works with current event loop
-                try:
-                    asyncio.get_running_loop()
-                    return _http_client
-                except RuntimeError:
-                    _http_client = None
-        except Exception:
-            _http_client = None
-
-    # Create new client
-    _http_client = httpx.AsyncClient(timeout=API_TIMEOUT)
-    logger.info("Created new HTTP client")
-    return _http_client
 
 
 def invalidate_api_key() -> None:
@@ -93,24 +61,24 @@ async def get_app_bundle_path() -> str:
         APIError: If unable to fetch or parse the website
     """
     try:
-        client = await get_http_client()
-        logger.debug(f"Fetching main website: {SYSTEMBOLAGET_WEBSITE}")
-        response = await client.get(SYSTEMBOLAGET_WEBSITE)
+        async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+            logger.debug(f"Fetching main website: {SYSTEMBOLAGET_WEBSITE}")
+            response = await client.get(SYSTEMBOLAGET_WEBSITE)
 
-        if response.status_code != 200:
-            raise APIError(f"Failed to fetch Systembolaget website: {response.status_code}")
+            if response.status_code != 200:
+                raise APIError(f"Failed to fetch Systembolaget website: {response.status_code}")
 
-        # Extract app bundle path using regex
-        # Pattern matches: <script src="/_next/static/chunks/pages/_app-HASH.js">
-        pattern = r'<script src="([^"]+_app-[^"]+\.js)"'
-        match = re.search(pattern, response.text)
+            # Extract app bundle path using regex
+            # Pattern matches: <script src="/_next/static/chunks/pages/_app-HASH.js">
+            pattern = r'<script src="([^"]+_app-[^"]+\.js)"'
+            match = re.search(pattern, response.text)
 
-        if not match:
-            raise APIError("Could not find app bundle path in website")
+            if not match:
+                raise APIError("Could not find app bundle path in website")
 
-        bundle_path = match.group(1)
-        logger.debug(f"Found app bundle path: {bundle_path}")
-        return bundle_path
+            bundle_path = match.group(1)
+            logger.debug(f"Found app bundle path: {bundle_path}")
+            return bundle_path
 
     except httpx.RequestError as e:
         raise APIError(f"Network error fetching website: {str(e)}")
@@ -161,26 +129,26 @@ async def extract_api_key() -> str:
             bundle_url = f"{SYSTEMBOLAGET_WEBSITE}{bundle_path}"
 
         # Fetch the app bundle
-        client = await get_http_client()
-        logger.debug(f"Fetching app bundle: {bundle_url}")
-        response = await client.get(bundle_url)
+        async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+            logger.debug(f"Fetching app bundle: {bundle_url}")
+            response = await client.get(bundle_url)
 
-        if response.status_code != 200:
-            raise APIError(f"Failed to fetch app bundle: {response.status_code}")
+            if response.status_code != 200:
+                raise APIError(f"Failed to fetch app bundle: {response.status_code}")
 
-        # Extract API key using regex
-        # Pattern matches: NEXT_PUBLIC_API_KEY_APIM:"key-value"
-        pattern = r'NEXT_PUBLIC_API_KEY_APIM:"([^"]+)"'
-        match = re.search(pattern, response.text)
+            # Extract API key using regex
+            # Pattern matches: NEXT_PUBLIC_API_KEY_APIM:"key-value"
+            pattern = r'NEXT_PUBLIC_API_KEY_APIM:"([^"]+)"'
+            match = re.search(pattern, response.text)
 
-        if not match:
-            raise APIError("Could not find API key in app bundle")
+            if not match:
+                raise APIError("Could not find API key in app bundle")
 
-        api_key = match.group(1)
-        _cached_api_key = api_key
-        _api_key_timestamp = time.time()
-        logger.info("API key extracted and cached successfully")
-        return api_key
+            api_key = match.group(1)
+            _cached_api_key = api_key
+            _api_key_timestamp = time.time()
+            logger.info("API key extracted and cached successfully")
+            return api_key
 
     except httpx.RequestError as e:
         raise APIError(f"Network error extracting API key: {str(e)}")
@@ -207,29 +175,29 @@ async def make_api_request(
         APIError: If the request fails
     """
     try:
-        client = await get_http_client()
-        logger.debug(f"API request: {url}")
-        response = await client.get(url, params=params, headers=headers)
+        async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+            logger.debug(f"API request: {url}")
+            response = await client.get(url, params=params, headers=headers)
 
-        if response.status_code == 404:
-            raise APIError("Resource not found")
-        elif response.status_code == 403:
-            # API key might be invalid, try refreshing once
-            if retry_on_403:
-                logger.warning("Got 403 response, invalidating API key and retrying")
-                invalidate_api_key()
-                # Retry with fresh key - caller needs to provide new headers
-                raise APIError("Access forbidden. API key may be invalid - please retry")
-            else:
-                raise APIError("Access forbidden. Check API key configuration")
-        elif response.status_code == 429:
-            raise APIError("Rate limit exceeded. Please try again later")
-        elif response.status_code >= 500:
-            raise APIError("Systembolaget API is currently unavailable")
-        elif response.status_code != 200:
-            raise APIError(f"API request failed with status {response.status_code}")
+            if response.status_code == 404:
+                raise APIError("Resource not found")
+            elif response.status_code == 403:
+                # API key might be invalid, try refreshing once
+                if retry_on_403:
+                    logger.warning("Got 403 response, invalidating API key and retrying")
+                    invalidate_api_key()
+                    # Retry with fresh key - caller needs to provide new headers
+                    raise APIError("Access forbidden. API key may be invalid - please retry")
+                else:
+                    raise APIError("Access forbidden. Check API key configuration")
+            elif response.status_code == 429:
+                raise APIError("Rate limit exceeded. Please try again later")
+            elif response.status_code >= 500:
+                raise APIError("Systembolaget API is currently unavailable")
+            elif response.status_code != 200:
+                raise APIError(f"API request failed with status {response.status_code}")
 
-        return response.json()
+            return response.json()
     except httpx.TimeoutException:
         raise APIError("Request timed out. Please try again")
     except httpx.RequestError as e:
@@ -805,23 +773,7 @@ async def get_store(params: GetStoreInput) -> str:
 
 def main() -> None:
     """Main entry point for the MCP server."""
-    import asyncio
-
-    # Close HTTP client on shutdown
-    async def cleanup() -> None:
-        global _http_client
-        if _http_client is not None:
-            await _http_client.aclose()
-            logger.info("HTTP client closed")
-
-    try:
-        mcp.run()
-    finally:
-        # Run cleanup
-        try:
-            asyncio.run(cleanup())
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+    mcp.run()
 
 
 if __name__ == "__main__":
