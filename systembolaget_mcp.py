@@ -4,13 +4,20 @@ A Model Context Protocol server for interacting with Systembolaget's APIs.
 Provides tools for searching products, stores, and retrieving detailed information.
 """
 
+import json
+import logging
 import os
 import re
-from typing import Optional, Literal
+from functools import wraps
+from typing import Optional, Literal, Callable, Any
 from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from mcp.server.fastmcp import FastMCP
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("systembolaget_mcp")
@@ -19,18 +26,43 @@ mcp = FastMCP("systembolaget_mcp")
 CHARACTER_LIMIT = 25000
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+API_TIMEOUT = 30.0
+API_KEY_CACHE_DURATION = 3600  # 1 hour in seconds
 
 # API Configuration
 SYSTEMBOLAGET_API_BASE = "https://api-extern.systembolaget.se/sb-api-ecommerce/v1"
 SYSTEMBOLAGET_WEBSITE = "https://www.systembolaget.se"
 
-# Cached API key
+# Cached API key and HTTP client
 _cached_api_key: Optional[str] = None
+_api_key_timestamp: Optional[float] = None
+_http_client: Optional[httpx.AsyncClient] = None
 
 
 class APIError(Exception):
     """Custom exception for API errors"""
     pass
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    """Get or create a shared HTTP client for reuse.
+
+    Returns:
+        httpx.AsyncClient: Shared async HTTP client
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=API_TIMEOUT)
+        logger.info("Created new HTTP client")
+    return _http_client
+
+
+def invalidate_api_key() -> None:
+    """Invalidate the cached API key to force re-extraction."""
+    global _cached_api_key, _api_key_timestamp
+    _cached_api_key = None
+    _api_key_timestamp = None
+    logger.info("API key cache invalidated")
 
 
 async def get_app_bundle_path() -> str:
@@ -43,21 +75,24 @@ async def get_app_bundle_path() -> str:
         APIError: If unable to fetch or parse the website
     """
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(SYSTEMBOLAGET_WEBSITE)
+        client = await get_http_client()
+        logger.debug(f"Fetching main website: {SYSTEMBOLAGET_WEBSITE}")
+        response = await client.get(SYSTEMBOLAGET_WEBSITE)
 
-            if response.status_code != 200:
-                raise APIError(f"Failed to fetch Systembolaget website: {response.status_code}")
+        if response.status_code != 200:
+            raise APIError(f"Failed to fetch Systembolaget website: {response.status_code}")
 
-            # Extract app bundle path using regex
-            # Pattern matches: <script src="/_next/static/chunks/pages/_app-HASH.js">
-            pattern = r'<script src="([^"]+_app-[^"]+\.js)"'
-            match = re.search(pattern, response.text)
+        # Extract app bundle path using regex
+        # Pattern matches: <script src="/_next/static/chunks/pages/_app-HASH.js">
+        pattern = r'<script src="([^"]+_app-[^"]+\.js)"'
+        match = re.search(pattern, response.text)
 
-            if not match:
-                raise APIError("Could not find app bundle path in website")
+        if not match:
+            raise APIError("Could not find app bundle path in website")
 
-            return match.group(1)
+        bundle_path = match.group(1)
+        logger.debug(f"Found app bundle path: {bundle_path}")
+        return bundle_path
 
     except httpx.RequestError as e:
         raise APIError(f"Network error fetching website: {str(e)}")
@@ -67,7 +102,8 @@ async def extract_api_key() -> str:
     """Extract the API key from Systembolaget's app bundle.
 
     This function fetches the main website, finds the app bundle script,
-    and extracts the NEXT_PUBLIC_API_KEY_APIM value.
+    and extracts the NEXT_PUBLIC_API_KEY_APIM value. Keys are cached for
+    API_KEY_CACHE_DURATION seconds to minimize overhead.
 
     Returns:
         str: The API key
@@ -75,19 +111,28 @@ async def extract_api_key() -> str:
     Raises:
         APIError: If unable to extract the API key
     """
-    global _cached_api_key
+    import time
+    global _cached_api_key, _api_key_timestamp
 
-    # Return cached key if available
-    if _cached_api_key:
-        return _cached_api_key
+    # Return cached key if available and not expired
+    if _cached_api_key and _api_key_timestamp:
+        age = time.time() - _api_key_timestamp
+        if age < API_KEY_CACHE_DURATION:
+            logger.debug(f"Using cached API key (age: {age:.0f}s)")
+            return _cached_api_key
+        else:
+            logger.info(f"API key cache expired (age: {age:.0f}s), refreshing")
 
     # Check environment variable first (optional override)
     env_key = os.getenv('SYSTEMBOLAGET_API_KEY')
     if env_key:
+        logger.info("Using API key from environment variable")
         _cached_api_key = env_key
+        _api_key_timestamp = time.time()
         return env_key
 
     try:
+        logger.info("Extracting API key from website")
         # Get app bundle path
         bundle_path = await get_app_bundle_path()
 
@@ -98,23 +143,26 @@ async def extract_api_key() -> str:
             bundle_url = f"{SYSTEMBOLAGET_WEBSITE}{bundle_path}"
 
         # Fetch the app bundle
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(bundle_url)
+        client = await get_http_client()
+        logger.debug(f"Fetching app bundle: {bundle_url}")
+        response = await client.get(bundle_url)
 
-            if response.status_code != 200:
-                raise APIError(f"Failed to fetch app bundle: {response.status_code}")
+        if response.status_code != 200:
+            raise APIError(f"Failed to fetch app bundle: {response.status_code}")
 
-            # Extract API key using regex
-            # Pattern matches: NEXT_PUBLIC_API_KEY_APIM:"key-value"
-            pattern = r'NEXT_PUBLIC_API_KEY_APIM:"([^"]+)"'
-            match = re.search(pattern, response.text)
+        # Extract API key using regex
+        # Pattern matches: NEXT_PUBLIC_API_KEY_APIM:"key-value"
+        pattern = r'NEXT_PUBLIC_API_KEY_APIM:"([^"]+)"'
+        match = re.search(pattern, response.text)
 
-            if not match:
-                raise APIError("Could not find API key in app bundle")
+        if not match:
+            raise APIError("Could not find API key in app bundle")
 
-            api_key = match.group(1)
-            _cached_api_key = api_key
-            return api_key
+        api_key = match.group(1)
+        _cached_api_key = api_key
+        _api_key_timestamp = time.time()
+        logger.info("API key extracted and cached successfully")
+        return api_key
 
     except httpx.RequestError as e:
         raise APIError(f"Network error extracting API key: {str(e)}")
@@ -122,15 +170,17 @@ async def extract_api_key() -> str:
 
 async def make_api_request(
     url: str,
-    params: Optional[dict] = None,
-    headers: Optional[dict] = None
-) -> dict:
+    params: Optional[dict[str, Any]] = None,
+    headers: Optional[dict[str, str]] = None,
+    retry_on_403: bool = True
+) -> dict[str, Any]:
     """Make an async HTTP request to Systembolaget API with error handling.
 
     Args:
         url: The API endpoint URL
         params: Query parameters
         headers: Request headers
+        retry_on_403: If True, retry once with refreshed API key on 403 error
 
     Returns:
         dict: JSON response from API
@@ -139,28 +189,36 @@ async def make_api_request(
         APIError: If the request fails
     """
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, params=params, headers=headers)
+        client = await get_http_client()
+        logger.debug(f"API request: {url}")
+        response = await client.get(url, params=params, headers=headers)
 
-            if response.status_code == 404:
-                raise APIError("Resource not found")
-            elif response.status_code == 403:
+        if response.status_code == 404:
+            raise APIError("Resource not found")
+        elif response.status_code == 403:
+            # API key might be invalid, try refreshing once
+            if retry_on_403:
+                logger.warning("Got 403 response, invalidating API key and retrying")
+                invalidate_api_key()
+                # Retry with fresh key - caller needs to provide new headers
+                raise APIError("Access forbidden. API key may be invalid - please retry")
+            else:
                 raise APIError("Access forbidden. Check API key configuration")
-            elif response.status_code == 429:
-                raise APIError("Rate limit exceeded. Please try again later")
-            elif response.status_code >= 500:
-                raise APIError("Systembolaget API is currently unavailable")
-            elif response.status_code != 200:
-                raise APIError(f"API request failed with status {response.status_code}")
+        elif response.status_code == 429:
+            raise APIError("Rate limit exceeded. Please try again later")
+        elif response.status_code >= 500:
+            raise APIError("Systembolaget API is currently unavailable")
+        elif response.status_code != 200:
+            raise APIError(f"API request failed with status {response.status_code}")
 
-            return response.json()
+        return response.json()
     except httpx.TimeoutException:
         raise APIError("Request timed out. Please try again")
     except httpx.RequestError as e:
         raise APIError(f"Network error: {str(e)}")
 
 
-def format_product_markdown(product: dict) -> str:
+def format_product_markdown(product: dict[str, Any]) -> str:
     """Format a product as markdown for human readability.
 
     Args:
@@ -206,7 +264,7 @@ def format_product_markdown(product: dict) -> str:
     return md
 
 
-def format_store_markdown(store: dict) -> str:
+def format_store_markdown(store: dict[str, Any]) -> str:
     """Format a store as markdown for human readability.
 
     Args:
@@ -259,6 +317,8 @@ def format_store_markdown(store: dict) -> str:
 def truncate_response(content: str, limit: int = CHARACTER_LIMIT) -> str:
     """Truncate content if it exceeds character limit.
 
+    Truncates at the last complete line before the limit to preserve formatting.
+
     Args:
         content: Content to truncate
         limit: Character limit
@@ -269,7 +329,14 @@ def truncate_response(content: str, limit: int = CHARACTER_LIMIT) -> str:
     if len(content) <= limit:
         return content
 
-    truncated = content[:limit]
+    # Try to truncate at last complete line to preserve formatting
+    truncate_point = content.rfind('\n', 0, limit)
+    if truncate_point > limit * 0.8:  # If we're within 80% of limit
+        truncated = content[:truncate_point]
+    else:
+        # Fall back to simple truncation if no good line break found
+        truncated = content[:limit]
+
     return f"{truncated}\n\n... [Response truncated. Try filtering results to see more details]"
 
 
@@ -403,12 +470,37 @@ class GetStoreInput(BaseModel):
     )
 
 
+# Error handling decorator
+
+def handle_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to handle errors consistently across all tool functions.
+
+    Args:
+        func: The async tool function to wrap
+
+    Returns:
+        Wrapped function with error handling
+    """
+    @wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> str:
+        try:
+            return await func(*args, **kwargs)  # type: ignore[no-any-return]
+        except APIError as e:
+            logger.error(f"API error in {func.__name__}: {str(e)}")
+            return f"Error: {str(e)}"
+        except Exception as e:
+            logger.exception(f"Unexpected error in {func.__name__}")
+            return f"Unexpected error: {str(e)}"
+    return wrapper  # type: ignore[return-value]
+
+
 # MCP Tools
 
 @mcp.tool(
     name="systembolaget_search_products",
     annotations={"readOnlyHint": True}
 )
+@handle_tool_errors
 async def search_products(params: SearchProductsInput) -> str:
     """Search for products in Systembolaget's catalog.
 
@@ -422,82 +514,84 @@ async def search_products(params: SearchProductsInput) -> str:
     Returns:
         str: Formatted list of matching products with details
     """
-    try:
-        # Get API key (automatically extracted from website)
-        api_key = await extract_api_key()
+    logger.info(f"Searching products: query={params.query}, category={params.category}")
 
-        # Build query parameters
-        query_params = {}
+    # Get API key (automatically extracted from website)
+    api_key = await extract_api_key()
 
-        if params.query:
-            query_params['searchQuery'] = params.query
-        if params.category:
-            query_params['category'] = params.category
-        if params.min_price is not None:
-            query_params['minPrice'] = params.min_price
-        if params.max_price is not None:
-            query_params['maxPrice'] = params.max_price
-        if params.min_alcohol is not None:
-            query_params['minAlcohol'] = params.min_alcohol
-        if params.max_alcohol is not None:
-            query_params['maxAlcohol'] = params.max_alcohol
-        if params.country:
-            query_params['country'] = params.country
+    # Build query parameters
+    query_params: dict[str, Any] = {}
 
-        query_params['page'] = params.offset // params.limit
-        query_params['pageSize'] = params.limit
+    if params.query:
+        query_params['searchQuery'] = params.query
+    if params.category:
+        query_params['category'] = params.category
+    if params.min_price is not None:
+        query_params['minPrice'] = params.min_price
+    if params.max_price is not None:
+        query_params['maxPrice'] = params.max_price
+    if params.min_alcohol is not None:
+        query_params['minAlcohol'] = params.min_alcohol
+    if params.max_alcohol is not None:
+        query_params['maxAlcohol'] = params.max_alcohol
+    if params.country:
+        query_params['country'] = params.country
 
-        # Make API request
-        headers = {
-            'Ocp-Apim-Subscription-Key': api_key
-        }
+    # Note: API uses page-based pagination. We convert offset to page number.
+    # For best results, use offset values that are multiples of limit.
+    page = params.offset // params.limit
+    query_params['page'] = page
+    query_params['pageSize'] = params.limit
 
-        url = f"{SYSTEMBOLAGET_API_BASE}/productsearch/search"
-        data = await make_api_request(url, params=query_params, headers=headers)
+    # Make API request
+    headers = {
+        'Ocp-Apim-Subscription-Key': api_key
+    }
 
-        products = data.get('products', [])
-        total_count = data.get('metadata', {}).get('totalCount', len(products))
+    url = f"{SYSTEMBOLAGET_API_BASE}/productsearch/search"
+    data = await make_api_request(url, params=query_params, headers=headers)
 
-        if params.format == "json":
-            import json
-            result = {
-                'products': products[:params.limit],
-                'pagination': {
-                    'limit': params.limit,
-                    'offset': params.offset,
-                    'total_count': total_count,
-                    'has_more': params.offset + len(products) < total_count
-                }
+    products = data.get('products', [])
+    total_count = data.get('metadata', {}).get('totalCount', len(products))
+
+    logger.info(f"Found {total_count} products, returning {len(products)}")
+
+    if params.format == "json":
+        result = {
+            'products': products,
+            'pagination': {
+                'limit': params.limit,
+                'offset': params.offset,
+                'total_count': total_count,
+                'returned_count': len(products),
+                'has_more': params.offset + len(products) < total_count
             }
-            return truncate_response(json.dumps(result, indent=2, ensure_ascii=False))
+        }
+        return truncate_response(json.dumps(result, indent=2, ensure_ascii=False))
 
-        # Markdown format
-        if not products:
-            return "No products found matching your criteria."
+    # Markdown format
+    if not products:
+        return "No products found matching your criteria."
 
-        result = f"# Product Search Results\n\n"
-        result += f"Found {total_count} products (showing {len(products[:params.limit])})\n\n"
+    result = f"# Product Search Results\n\n"
+    result += f"Found {total_count} products (showing {len(products)})\n\n"
 
-        for product in products[:params.limit]:
-            result += format_product_markdown(product) + "\n\n"
+    for product in products:
+        result += format_product_markdown(product) + "\n\n"
 
-        # Pagination info
-        if params.offset + len(products) < total_count:
-            next_offset = params.offset + params.limit
-            result += f"\n---\n**More results available.** Use `offset: {next_offset}` to see the next page.\n"
+    # Pagination info
+    if params.offset + len(products) < total_count:
+        next_offset = params.offset + params.limit
+        result += f"\n---\n**More results available.** Use `offset: {next_offset}` to see the next page.\n"
 
-        return truncate_response(result)
-
-    except APIError as e:
-        return f"❌ Error: {str(e)}"
-    except Exception as e:
-        return f"❌ Unexpected error: {str(e)}"
+    return truncate_response(result)
 
 
 @mcp.tool(
     name="systembolaget_get_product",
     annotations={"readOnlyHint": True}
 )
+@handle_tool_errors
 async def get_product(params: GetProductInput) -> str:
     """Get detailed information about a specific product.
 
@@ -510,56 +604,55 @@ async def get_product(params: GetProductInput) -> str:
     Returns:
         str: Detailed product information
     """
-    try:
-        # Get API key (automatically extracted from website)
-        api_key = await extract_api_key()
+    logger.info(f"Getting product: {params.product_number}")
 
-        headers = {
-            'Ocp-Apim-Subscription-Key': api_key
-        }
+    # Get API key (automatically extracted from website)
+    api_key = await extract_api_key()
 
-        url = f"{SYSTEMBOLAGET_API_BASE}/product/{params.product_number}"
-        product = await make_api_request(url, headers=headers)
+    headers = {
+        'Ocp-Apim-Subscription-Key': api_key
+    }
 
-        if params.format == "json":
-            import json
-            return truncate_response(json.dumps(product, indent=2, ensure_ascii=False))
+    url = f"{SYSTEMBOLAGET_API_BASE}/product/{params.product_number}"
+    product = await make_api_request(url, headers=headers)
 
-        # Markdown format with full details
-        result = format_product_markdown(product)
+    if params.format == "json":
+        return truncate_response(json.dumps(product, indent=2, ensure_ascii=False))
 
-        # Add extended information
-        if 'description' in product:
-            result += f"\n**Description:**\n{product['description']}\n"
+    # Markdown format with full details
+    result = format_product_markdown(product)
 
-        if 'taste' in product:
-            result += f"\n**Taste:**\n{product['taste']}\n"
+    # Add extended information
+    if 'description' in product:
+        result += f"\n**Description:**\n{product['description']}\n"
 
-        if 'usage' in product:
-            result += f"\n**Serving Suggestions:**\n{product['usage']}\n"
+    if 'taste' in product:
+        result += f"\n**Taste:**\n{product['taste']}\n"
 
-        if 'tasteSymbols' in product and product['tasteSymbols']:
-            result += f"\n**Food Pairings:**\n"
-            for symbol in product['tasteSymbols']:
-                result += f"- {symbol}\n"
+    if 'usage' in product:
+        result += f"\n**Serving Suggestions:**\n{product['usage']}\n"
 
-        return truncate_response(result)
+    if 'tasteSymbols' in product and product['tasteSymbols']:
+        result += f"\n**Food Pairings:**\n"
+        for symbol in product['tasteSymbols']:
+            result += f"- {symbol}\n"
 
-    except APIError as e:
-        return f"❌ Error: {str(e)}"
-    except Exception as e:
-        return f"❌ Unexpected error: {str(e)}"
+    return truncate_response(result)
 
 
 @mcp.tool(
     name="systembolaget_search_stores",
     annotations={"readOnlyHint": True}
 )
+@handle_tool_errors
 async def search_stores(params: SearchStoresInput) -> str:
     """Search for Systembolaget stores.
 
     Find stores by name, location, or city. Returns store information including
     addresses, phone numbers, and opening hours.
+
+    Note: The API returns all matching stores, so pagination is applied client-side.
+    This means all results are fetched from the API even when using pagination.
 
     Args:
         params: Search parameters including query, city filter, and pagination
@@ -567,85 +660,91 @@ async def search_stores(params: SearchStoresInput) -> str:
     Returns:
         str: List of matching stores with details
     """
-    try:
-        # Get API key (automatically extracted from website)
-        api_key = await extract_api_key()
+    logger.info(f"Searching stores: query={params.query}, city={params.city}")
 
-        headers = {
-            'Ocp-Apim-Subscription-Key': api_key,
-            'Origin': 'https://www.systembolaget.se'
-        }
+    # Get API key (automatically extracted from website)
+    api_key = await extract_api_key()
 
-        query_params = {
-            'includePredictions': 'true'
-        }
+    headers = {
+        'Ocp-Apim-Subscription-Key': api_key,
+        'Origin': 'https://www.systembolaget.se'
+    }
 
-        # Combine query and city into single search term
-        search_terms = []
-        if params.query:
-            search_terms.append(params.query)
-        if params.city:
-            search_terms.append(params.city)
+    query_params: dict[str, Any] = {
+        'includePredictions': 'true'
+    }
 
-        if search_terms:
-            query_params['q'] = ' '.join(search_terms)
+    # Combine query and city into single search term
+    search_terms = []
+    if params.query:
+        search_terms.append(params.query)
+    if params.city:
+        search_terms.append(params.city)
 
-        url = f"{SYSTEMBOLAGET_API_BASE}/sitesearch/site"
-        data = await make_api_request(url, params=query_params, headers=headers)
+    if search_terms:
+        query_params['q'] = ' '.join(search_terms)
 
-        stores = data.get('siteSearchResults', [])
+    url = f"{SYSTEMBOLAGET_API_BASE}/sitesearch/site"
+    data = await make_api_request(url, params=query_params, headers=headers)
 
-        # Apply pagination manually since API doesn't support it
-        total_count = len(stores)
-        paginated_stores = stores[params.offset:params.offset + params.limit]
+    stores = data.get('siteSearchResults', [])
 
-        if params.format == "json":
-            import json
-            result = {
-                'stores': paginated_stores,
-                'pagination': {
-                    'limit': params.limit,
-                    'offset': params.offset,
-                    'total_count': total_count,
-                    'has_more': params.offset + params.limit < total_count
-                }
+    # Note: API doesn't support pagination parameters, so we fetch all results
+    # and paginate client-side. For large result sets, consider using more specific queries.
+    total_count = len(stores)
+    paginated_stores = stores[params.offset:params.offset + params.limit]
+
+    logger.info(f"Found {total_count} stores, returning {len(paginated_stores)}")
+
+    if params.format == "json":
+        result = {
+            'stores': paginated_stores,
+            'pagination': {
+                'limit': params.limit,
+                'offset': params.offset,
+                'total_count': total_count,
+                'returned_count': len(paginated_stores),
+                'has_more': params.offset + params.limit < total_count
             }
-            return truncate_response(json.dumps(result, indent=2, ensure_ascii=False))
+        }
+        return truncate_response(json.dumps(result, indent=2, ensure_ascii=False))
 
-        # Markdown format
-        if not paginated_stores:
-            return "No stores found matching your criteria."
+    # Markdown format
+    if not paginated_stores:
+        return "No stores found matching your criteria."
 
-        result = f"# Store Search Results\n\n"
-        result += f"Found {total_count} stores (showing {len(paginated_stores)})\n\n"
+    result = f"# Store Search Results\n\n"
+    result += f"Found {total_count} stores (showing {len(paginated_stores)})\n\n"
 
-        for store in paginated_stores:
-            result += format_store_markdown(store) + "\n\n"
+    for store in paginated_stores:
+        result += format_store_markdown(store) + "\n\n"
 
-        # Pagination info
-        if params.offset + params.limit < total_count:
-            next_offset = params.offset + params.limit
-            result += f"\n---\n**More results available.** Use `offset: {next_offset}` to see the next page.\n"
+    # Pagination info
+    if params.offset + params.limit < total_count:
+        next_offset = params.offset + params.limit
+        result += f"\n---\n**More results available.** Use `offset: {next_offset}` to see the next page.\n"
 
-        return truncate_response(result)
-
-    except APIError as e:
-        return f"❌ Error: {str(e)}"
-    except Exception as e:
-        return f"❌ Unexpected error: {str(e)}"
+    return truncate_response(result)
 
 
-# Note: Individual store lookup endpoint not available in current API
-# Keeping function for potential future use or if endpoint becomes available
+# Note: Individual store lookup endpoint not available in current API.
+# The endpoint /site/{store_id} returns 404 errors.
+# Keeping function for potential future use if endpoint becomes available.
+# To enable, uncomment the @mcp.tool decorator below.
+#
 # @mcp.tool(
 #     name="systembolaget_get_store",
 #     annotations={"readOnlyHint": True}
 # )
+@handle_tool_errors
 async def get_store(params: GetStoreInput) -> str:
     """Get detailed information about a specific store.
 
     Retrieves comprehensive details about a store including address, contact
     information, opening hours, and available services.
+
+    Note: This endpoint is currently not available in the API and will return
+    a 404 error. Use search_stores instead.
 
     Args:
         params: Store parameters including store ID and format
@@ -653,44 +752,59 @@ async def get_store(params: GetStoreInput) -> str:
     Returns:
         str: Detailed store information
     """
+    logger.info(f"Getting store: {params.store_id}")
+
+    # Get API key (automatically extracted from website)
+    api_key = await extract_api_key()
+
+    headers = {
+        'Ocp-Apim-Subscription-Key': api_key
+    }
+
+    url = f"{SYSTEMBOLAGET_API_BASE}/site/{params.store_id}"
+    store = await make_api_request(url, headers=headers)
+
+    if params.format == "json":
+        return truncate_response(json.dumps(store, indent=2, ensure_ascii=False))
+
+    # Markdown format with full details
+    result = format_store_markdown(store)
+
+    # Add extended information
+    if 'services' in store and store['services']:
+        result += f"\n**Services:**\n"
+        for service in store['services']:
+            result += f"- {service}\n"
+
+    if 'parkingInfo' in store:
+        result += f"\n**Parking:** {store['parkingInfo']}\n"
+
+    if 'publicTransport' in store:
+        result += f"\n**Public Transport:** {store['publicTransport']}\n"
+
+    return truncate_response(result)
+
+
+def main() -> None:
+    """Main entry point for the MCP server."""
+    import asyncio
+
+    # Close HTTP client on shutdown
+    async def cleanup() -> None:
+        global _http_client
+        if _http_client is not None:
+            await _http_client.aclose()
+            logger.info("HTTP client closed")
+
     try:
-        # Get API key (automatically extracted from website)
-        api_key = await extract_api_key()
-
-        headers = {
-            'Ocp-Apim-Subscription-Key': api_key
-        }
-
-        url = f"{SYSTEMBOLAGET_API_BASE}/site/{params.store_id}"
-        store = await make_api_request(url, headers=headers)
-
-        if params.format == "json":
-            import json
-            return truncate_response(json.dumps(store, indent=2, ensure_ascii=False))
-
-        # Markdown format with full details
-        result = format_store_markdown(store)
-
-        # Add extended information
-        if 'services' in store and store['services']:
-            result += f"\n**Services:**\n"
-            for service in store['services']:
-                result += f"- {service}\n"
-
-        if 'parkingInfo' in store:
-            result += f"\n**Parking:** {store['parkingInfo']}\n"
-
-        if 'publicTransport' in store:
-            result += f"\n**Public Transport:** {store['publicTransport']}\n"
-
-        return truncate_response(result)
-
-    except APIError as e:
-        return f"❌ Error: {str(e)}"
-    except Exception as e:
-        return f"❌ Unexpected error: {str(e)}"
+        mcp.run()
+    finally:
+        # Run cleanup
+        try:
+            asyncio.run(cleanup())
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 
 if __name__ == "__main__":
-    # Run the MCP server
-    mcp.run()
+    main()

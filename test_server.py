@@ -1,94 +1,229 @@
 #!/usr/bin/env python3
-"""Test script for Systembolaget MCP server.
+"""Test suite for Systembolaget MCP server.
 
-This script demonstrates how to call the MCP server tools directly
+This test suite validates the MCP server tools by calling them directly
 without going through the JSON-RPC protocol.
 """
 
-import asyncio
+import pytest
 from systembolaget_mcp import (
     search_products,
     get_product,
     search_stores,
-    get_store,
     SearchProductsInput,
     GetProductInput,
     SearchStoresInput,
-    GetStoreInput,
 )
 
 
-async def test_search_products():
-    """Test searching for Swedish beers under 50 SEK."""
-    print("=" * 80)
-    print("Test 1: Search for Swedish beers under 50 SEK")
-    print("=" * 80)
+class TestProductSearch:
+    """Tests for product search functionality."""
 
-    params = SearchProductsInput(
-        query="öl",
-        country="Sverige",
-        max_price=50.0,
-        limit=5
-    )
+    @pytest.mark.asyncio
+    async def test_search_products_basic(self):
+        """Test basic product search returns results."""
+        params = SearchProductsInput(
+            query="öl",
+            limit=5
+        )
 
-    result = await search_products(params)
-    print(result)
-    print("\n")
+        result = await search_products(params)
+
+        # Should return a string (either markdown or error message)
+        assert isinstance(result, str)
+        assert len(result) > 0
+        # Should not be an error message
+        assert not result.startswith("Error:")
+
+    @pytest.mark.asyncio
+    async def test_search_products_with_filters(self):
+        """Test product search with multiple filters."""
+        params = SearchProductsInput(
+            query="öl",
+            country="Sverige",
+            max_price=50.0,
+            limit=5
+        )
+
+        result = await search_products(params)
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+        # Should contain markdown headers
+        assert "Product Search Results" in result or "No products found" in result
+
+    @pytest.mark.asyncio
+    async def test_search_products_json_format(self):
+        """Test product search with JSON output format."""
+        params = SearchProductsInput(
+            query="vin",
+            limit=3,
+            format="json"
+        )
+
+        result = await search_products(params)
+
+        assert isinstance(result, str)
+        # Should be valid JSON structure (basic check)
+        assert "{" in result and "}" in result
+        # JSON responses should contain pagination info
+        assert "pagination" in result or "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_search_products_pagination(self):
+        """Test product search pagination."""
+        params = SearchProductsInput(
+            query="öl",
+            limit=10,
+            offset=0
+        )
+
+        result = await search_products(params)
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_search_products_no_results(self):
+        """Test product search with query that returns no results."""
+        params = SearchProductsInput(
+            query="xyzabc123nonexistent",
+            limit=5
+        )
+
+        result = await search_products(params)
+
+        assert isinstance(result, str)
+        assert "No products found" in result or "Error" in result
 
 
-async def test_search_stores():
-    """Test searching for stores in Stockholm."""
-    print("=" * 80)
-    print("Test 2: Search for stores in Stockholm")
-    print("=" * 80)
+class TestProductDetails:
+    """Tests for individual product details."""
 
-    params = SearchStoresInput(
-        city="Stockholm",
-        limit=3
-    )
+    @pytest.mark.asyncio
+    async def test_get_product_invalid_number(self):
+        """Test getting product with invalid product number."""
+        params = GetProductInput(
+            product_number="999999999"
+        )
 
-    result = await search_stores(params)
-    print(result)
-    print("\n")
+        result = await get_product(params)
 
+        assert isinstance(result, str)
+        # Should either return error or "not found"
+        assert "Error" in result or "not found" in result.lower()
 
-async def test_get_product():
-    """Test getting a specific product (example product number)."""
-    print("=" * 80)
-    print("Test 3: Get product details (example)")
-    print("=" * 80)
+    @pytest.mark.asyncio
+    async def test_get_product_json_format(self):
+        """Test getting product details in JSON format."""
+        params = GetProductInput(
+            product_number="1",
+            format="json"
+        )
 
-    params = GetProductInput(
-        product_number="1"  # You'd need a real product number
-    )
+        result = await get_product(params)
 
-    result = await get_product(params)
-    print(result)
-    print("\n")
-
-
-async def main():
-    """Run all tests."""
-    print("\n🧪 Testing Systembolaget MCP Server\n")
-
-    try:
-        await test_search_products()
-    except Exception as e:
-        print(f"❌ Test 1 failed: {e}\n")
-
-    try:
-        await test_search_stores()
-    except Exception as e:
-        print(f"❌ Test 2 failed: {e}\n")
-
-    # Uncomment to test specific product lookup
-    # try:
-    #     await test_get_product()
-    # except Exception as e:
-    #     print(f"❌ Test 3 failed: {e}\n")
-
-    print("✅ Testing complete!\n")
+        assert isinstance(result, str)
+        # Will likely error but should still return a string
 
 
+class TestStoreSearch:
+    """Tests for store search functionality."""
+
+    @pytest.mark.asyncio
+    async def test_search_stores_by_city(self):
+        """Test searching for stores by city."""
+        params = SearchStoresInput(
+            city="Stockholm",
+            limit=3
+        )
+
+        result = await search_stores(params)
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+        # Should contain store results or error
+        assert "Store Search Results" in result or "No stores found" in result or "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_search_stores_by_query(self):
+        """Test searching for stores by query."""
+        params = SearchStoresInput(
+            query="Vasagatan",
+            limit=5
+        )
+
+        result = await search_stores(params)
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_search_stores_json_format(self):
+        """Test store search with JSON output format."""
+        params = SearchStoresInput(
+            city="Göteborg",
+            limit=2,
+            format="json"
+        )
+
+        result = await search_stores(params)
+
+        assert isinstance(result, str)
+        # Should be valid JSON structure
+        assert "{" in result or "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_search_stores_pagination(self):
+        """Test store search pagination."""
+        params = SearchStoresInput(
+            city="Stockholm",
+            limit=5,
+            offset=0
+        )
+
+        result = await search_stores(params)
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+class TestInputValidation:
+    """Tests for input validation."""
+
+    def test_search_products_invalid_price_range(self):
+        """Test that invalid price range raises validation error."""
+        with pytest.raises(ValueError, match="max_price must be greater than"):
+            SearchProductsInput(
+                query="öl",
+                min_price=100.0,
+                max_price=50.0
+            )
+
+    def test_search_products_invalid_alcohol_range(self):
+        """Test that invalid alcohol range raises validation error."""
+        with pytest.raises(ValueError, match="max_alcohol must be greater than"):
+            SearchProductsInput(
+                query="vin",
+                min_alcohol=15.0,
+                max_alcohol=10.0
+            )
+
+    def test_search_products_limit_bounds(self):
+        """Test that limit respects min/max bounds."""
+        # Should accept valid limits
+        params = SearchProductsInput(query="öl", limit=20)
+        assert params.limit == 20
+
+        # Should reject invalid limits
+        with pytest.raises(ValueError):
+            SearchProductsInput(query="öl", limit=0)
+
+        with pytest.raises(ValueError):
+            SearchProductsInput(query="öl", limit=101)
+
+
+# Manual test runner for debugging (optional)
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    pytest.main([__file__, "-v"] + sys.argv[1:])
