@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluations>
+    <evaluation>
+        <question>Find all Swedish craft beers priced under 40 SEK. How many results are there and what are the top 3 recommendations based on their taste profiles?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products with filters for category (Öl), country (Sverige), and max_price (40)
+        2. Parse the results to count total products
+        3. Analyze taste profiles from the returned data
+        4. Provide recommendations based on taste characteristics
+        Expected tool calls: systembolaget_search_products with appropriate filters</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>I'm looking for a wine to pair with seafood. Find Italian white wines with moderate alcohol content (11-13%) priced between 100-200 SEK. What are the best options?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products with filters for category (Vin/Wine), country (Italien/Italy), min_alcohol (11), max_alcohol (13), min_price (100), max_price (200)
+        2. Analyze the taste profiles and food pairing suggestions
+        3. Filter for white wines specifically
+        4. Provide recommendations suitable for seafood
+        Expected tool calls: systembolaget_search_products with wine-specific filters</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>What are all the Systembolaget stores in Stockholm? List them with their addresses and tell me which one has the longest opening hours.</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_stores with city filter (Stockholm)
+        2. Extract all store addresses from results
+        3. Handle pagination if there are more than 20 stores
+        4. Potentially call systembolaget_get_store for detailed opening hours
+        5. Compare opening hours across stores
+        Expected tool calls: systembolaget_search_stores (possibly multiple times for pagination), potentially multiple systembolaget_get_store calls</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>Compare three products: IPA from Sweden (product number would need to be found first), find their alcohol content, price per liter, and taste profiles. Which offers the best value?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products to find Swedish IPAs
+        2. Select three specific products
+        3. Use systembolaget_get_product for each to get detailed information
+        4. Calculate price per liter (price / (volume/1000))
+        5. Compare taste profiles
+        6. Provide value analysis
+        Expected tool calls: systembolaget_search_products, then 3x systembolaget_get_product</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>I want to host a whisky tasting. Find 5 different whiskies from different countries with varying price points (from budget to premium). Provide details about their taste profiles and origins.</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products with category filter (Whisky/Sprit)
+        2. Search across multiple price ranges to get variety
+        3. Filter results to ensure different countries of origin
+        4. Use systembolaget_get_product for detailed taste information
+        5. Organize results by price and origin
+        Expected tool calls: Multiple systembolaget_search_products calls with different price ranges, followed by systembolaget_get_product calls for selected items</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>Find the nearest Systembolaget store to Gamla Stan in Stockholm. What are their opening hours today and do they have parking?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_stores with query or city filter for Stockholm/Gamla Stan
+        2. Identify the most relevant store based on location name
+        3. Use systembolaget_get_store to get detailed information
+        4. Extract opening hours and parking information
+        Expected tool calls: systembolaget_search_stores, systembolaget_get_store</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>I'm planning a party and need to find products across different categories: sparkling wine (100-150 SEK), craft beer (under 40 SEK), and a premium vodka (500+ SEK). What would you recommend from each category?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products three separate times with different category and price filters
+        2. Filter for sparkling wines (category: Mousserande vin) with price range 100-150
+        3. Search for craft beers with max_price 40
+        4. Search for vodka (category: Vodka) with min_price 500
+        5. Provide recommendations from each category with rationale
+        Expected tool calls: 3x systembolaget_search_products with different parameters</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>What are the sweetest wines available under 200 SEK? I prefer dessert wines. List them by sweetness level.</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products with category filter for wine and max_price 200
+        2. Filter or search specifically for dessert wines (Söta viner/Dessert wines)
+        3. Analyze tasteClockSweetness values from results
+        4. Sort results by sweetness level (highest to lowest)
+        5. Present results with sweetness ratings
+        Expected tool calls: systembolaget_search_products, potentially with multiple queries to find dessert wines</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>Find organic beers from Germany with alcohol content between 4-6%. How many are available and what are their price ranges?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_products with category (Öl), country (Tyskland/Germany), min_alcohol (4), max_alcohol (6)
+        2. Filter results for organic products (if indicated in product data)
+        3. Count total results
+        4. Analyze price distribution (min, max, average)
+        5. Present findings with price statistics
+        Expected tool calls: systembolaget_search_products with appropriate filters</answer>
+    </evaluation>
+
+    <evaluation>
+        <question>I want to compare all Systembolaget stores in Uppsala. How many are there, what are their addresses, and which one is closest to the central station?</question>
+        <answer>This evaluation tests the ability to:
+        1. Use systembolaget_search_stores with city filter (Uppsala)
+        2. Handle pagination if needed to get all stores
+        3. Extract addresses for all stores
+        4. Identify which store is likely closest to central station based on address/location name
+        5. Provide a comprehensive comparison
+        Expected tool calls: systembolaget_search_stores (potentially multiple for pagination), possibly systembolaget_get_store for detailed information</answer>
+    </evaluation>
+</evaluations>
