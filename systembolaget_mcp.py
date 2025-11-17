@@ -50,10 +50,28 @@ async def get_http_client() -> httpx.AsyncClient:
     Returns:
         httpx.AsyncClient: Shared async HTTP client
     """
+    import asyncio
     global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=API_TIMEOUT)
-        logger.info("Created new HTTP client")
+
+    # Check if client exists and is still valid for current event loop
+    if _http_client is not None:
+        try:
+            # Check if client is closed or tied to a different/closed event loop
+            if _http_client.is_closed:
+                _http_client = None
+            else:
+                # Try to verify the client works with current event loop
+                try:
+                    asyncio.get_running_loop()
+                    return _http_client
+                except RuntimeError:
+                    _http_client = None
+        except Exception:
+            _http_client = None
+
+    # Create new client
+    _http_client = httpx.AsyncClient(timeout=API_TIMEOUT)
+    logger.info("Created new HTTP client")
     return _http_client
 
 
