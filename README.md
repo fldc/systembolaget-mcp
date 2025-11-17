@@ -31,7 +31,8 @@ A Model Context Protocol (MCP) server for interacting with Systembolaget's APIs.
 ### Prerequisites
 
 - Python 3.10 or higher
-- A Systembolaget API key from [api-portal.systembolaget.se](https://api-portal.systembolaget.se/)
+
+**Note:** No API key required! The server automatically extracts the API key from Systembolaget's website.
 
 ### Setup
 
@@ -51,7 +52,7 @@ Or install development dependencies:
 pip install -e ".[dev]"
 ```
 
-3. Configure your API key:
+3. (Optional) Configure a custom API key:
 ```bash
 export SYSTEMBOLAGET_API_KEY="your-api-key-here"
 ```
@@ -60,6 +61,8 @@ Or create a `.env` file:
 ```bash
 SYSTEMBOLAGET_API_KEY=your-api-key-here
 ```
+
+**The API key is optional.** If not provided, the server will automatically extract it from Systembolaget's website.
 
 ## Usage
 
@@ -77,14 +80,13 @@ Add this configuration to your Claude Desktop config file:
   "mcpServers": {
     "systembolaget": {
       "command": "python",
-      "args": ["/absolute/path/to/systembolaget-mcp/systembolaget_mcp.py"],
-      "env": {
-        "SYSTEMBOLAGET_API_KEY": "your-api-key-here"
-      }
+      "args": ["/absolute/path/to/systembolaget-mcp/systembolaget_mcp.py"]
     }
   }
 }
 ```
+
+**Note:** The `env` section with `SYSTEMBOLAGET_API_KEY` is optional. The server will automatically extract the API key if not provided.
 
 #### Standalone Testing
 
@@ -206,15 +208,32 @@ mypy systembolaget_mcp.py
 ruff systembolaget_mcp.py
 ```
 
-## API Configuration
+## API Key Extraction
 
-This MCP server requires a Systembolaget API key. To obtain one:
+This MCP server **automatically extracts the API key** from Systembolaget's website - no manual configuration needed!
+
+### How it works
+
+The server uses the same technique as [AlexGustafsson/systembolaget-api](https://github.com/AlexGustafsson/systembolaget-api):
+
+1. Fetches Systembolaget's main website
+2. Extracts the Next.js app bundle path from the HTML
+3. Downloads the app bundle JavaScript file
+4. Extracts the `NEXT_PUBLIC_API_KEY_APIM` value
+5. Caches the key for subsequent requests
+
+This approach works because Systembolaget's public website uses the same API key in their frontend code.
+
+### Manual Configuration (Optional)
+
+If you prefer to use a custom API key or if automatic extraction fails:
 
 1. Visit [api-portal.systembolaget.se](https://api-portal.systembolaget.se/)
-2. Create an account or sign in
-3. Subscribe to the necessary APIs
-4. Copy your API key
-5. Set it as an environment variable: `SYSTEMBOLAGET_API_KEY`
+2. Create an account and subscribe to the APIs
+3. Copy your API key
+4. Set it as an environment variable: `SYSTEMBOLAGET_API_KEY=your-key`
+
+The server will use your custom key instead of extracting one automatically.
 
 ## Architecture
 
@@ -227,10 +246,12 @@ The server is built using:
 ### Design Principles
 
 - **Agent-centric design**: Tools are designed for complete workflows, not just API wrappers
+- **Automatic API key extraction**: No manual configuration required - keys are extracted automatically
 - **Error handling**: Comprehensive error handling with actionable messages
 - **Pagination**: All list operations support pagination to manage large result sets
 - **Format flexibility**: Both human-readable (Markdown) and machine-readable (JSON) outputs
 - **Character limits**: Responses are truncated to prevent overwhelming context windows
+- **Caching**: API keys are cached to minimize overhead
 
 ## Contributing
 

@@ -5,6 +5,7 @@ Provides tools for searching products, stores, and retrieving detailed informati
 """
 
 import os
+import re
 from typing import Optional, Literal
 from urllib.parse import urlencode
 import httpx
@@ -21,12 +22,102 @@ MAX_PAGE_SIZE = 100
 
 # API Configuration
 SYSTEMBOLAGET_API_BASE = "https://api-extern.systembolaget.se/sb-api-ecommerce/v1"
-SYSTEMBOLAGET_STORE_API = "https://api-portal.systembolaget.se/api/v1"
+SYSTEMBOLAGET_WEBSITE = "https://www.systembolaget.se"
+
+# Cached API key
+_cached_api_key: Optional[str] = None
 
 
 class APIError(Exception):
     """Custom exception for API errors"""
     pass
+
+
+async def get_app_bundle_path() -> str:
+    """Extract the app bundle path from Systembolaget's main website.
+
+    Returns:
+        str: Path to the app bundle JavaScript file
+
+    Raises:
+        APIError: If unable to fetch or parse the website
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(SYSTEMBOLAGET_WEBSITE)
+
+            if response.status_code != 200:
+                raise APIError(f"Failed to fetch Systembolaget website: {response.status_code}")
+
+            # Extract app bundle path using regex
+            # Pattern matches: <script src="/_next/static/chunks/pages/_app-HASH.js">
+            pattern = r'<script src="([^"]+_app-[^"]+\.js)"'
+            match = re.search(pattern, response.text)
+
+            if not match:
+                raise APIError("Could not find app bundle path in website")
+
+            return match.group(1)
+
+    except httpx.RequestError as e:
+        raise APIError(f"Network error fetching website: {str(e)}")
+
+
+async def extract_api_key() -> str:
+    """Extract the API key from Systembolaget's app bundle.
+
+    This function fetches the main website, finds the app bundle script,
+    and extracts the NEXT_PUBLIC_API_KEY_APIM value.
+
+    Returns:
+        str: The API key
+
+    Raises:
+        APIError: If unable to extract the API key
+    """
+    global _cached_api_key
+
+    # Return cached key if available
+    if _cached_api_key:
+        return _cached_api_key
+
+    # Check environment variable first (optional override)
+    env_key = os.getenv('SYSTEMBOLAGET_API_KEY')
+    if env_key:
+        _cached_api_key = env_key
+        return env_key
+
+    try:
+        # Get app bundle path
+        bundle_path = await get_app_bundle_path()
+
+        # Construct full URL
+        if bundle_path.startswith('http'):
+            bundle_url = bundle_path
+        else:
+            bundle_url = f"{SYSTEMBOLAGET_WEBSITE}{bundle_path}"
+
+        # Fetch the app bundle
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(bundle_url)
+
+            if response.status_code != 200:
+                raise APIError(f"Failed to fetch app bundle: {response.status_code}")
+
+            # Extract API key using regex
+            # Pattern matches: NEXT_PUBLIC_API_KEY_APIM:"key-value"
+            pattern = r'NEXT_PUBLIC_API_KEY_APIM:"([^"]+)"'
+            match = re.search(pattern, response.text)
+
+            if not match:
+                raise APIError("Could not find API key in app bundle")
+
+            api_key = match.group(1)
+            _cached_api_key = api_key
+            return api_key
+
+    except httpx.RequestError as e:
+        raise APIError(f"Network error extracting API key: {str(e)}")
 
 
 async def make_api_request(
@@ -317,6 +408,9 @@ async def search_products(params: SearchProductsInput) -> str:
         str: Formatted list of matching products with details
     """
     try:
+        # Get API key (automatically extracted from website)
+        api_key = await extract_api_key()
+
         # Build query parameters
         query_params = {}
 
@@ -338,24 +432,7 @@ async def search_products(params: SearchProductsInput) -> str:
         query_params['page'] = params.offset // params.limit
         query_params['pageSize'] = params.limit
 
-        # Note: This is a simplified implementation. The actual Systembolaget API
-        # may require authentication and have different endpoint structure.
-        # This serves as a template that can be adapted once API access is configured.
-
-        # For now, return a helpful message about API configuration
-        api_key = os.getenv('SYSTEMBOLAGET_API_KEY')
-        if not api_key:
-            return """⚠️  **API Configuration Required**
-
-To use this tool, you need to configure a Systembolaget API key:
-
-1. Obtain an API key from https://api-portal.systembolaget.se/
-2. Set the environment variable: `SYSTEMBOLAGET_API_KEY=your_key_here`
-
-Once configured, this tool will search products with the following parameters:
-""" + "\n".join(f"- {k}: {v}" for k, v in query_params.items())
-
-        # Make API request (this is a template - adjust URL and headers as needed)
+        # Make API request
         headers = {
             'Ocp-Apim-Subscription-Key': api_key
         }
@@ -419,16 +496,8 @@ async def get_product(params: GetProductInput) -> str:
         str: Detailed product information
     """
     try:
-        api_key = os.getenv('SYSTEMBOLAGET_API_KEY')
-        if not api_key:
-            return """⚠️  **API Configuration Required**
-
-To use this tool, you need to configure a Systembolaget API key:
-
-1. Obtain an API key from https://api-portal.systembolaget.se/
-2. Set the environment variable: `SYSTEMBOLAGET_API_KEY=your_key_here`
-
-This tool will retrieve detailed information for product: """ + params.product_number
+        # Get API key (automatically extracted from website)
+        api_key = await extract_api_key()
 
         headers = {
             'Ocp-Apim-Subscription-Key': api_key
@@ -484,16 +553,8 @@ async def search_stores(params: SearchStoresInput) -> str:
         str: List of matching stores with details
     """
     try:
-        api_key = os.getenv('SYSTEMBOLAGET_API_KEY')
-        if not api_key:
-            return """⚠️  **API Configuration Required**
-
-To use this tool, you need to configure a Systembolaget API key:
-
-1. Obtain an API key from https://api-portal.systembolaget.se/
-2. Set the environment variable: `SYSTEMBOLAGET_API_KEY=your_key_here`
-
-This tool will search stores with your specified criteria."""
+        # Get API key (automatically extracted from website)
+        api_key = await extract_api_key()
 
         headers = {
             'Ocp-Apim-Subscription-Key': api_key
@@ -568,16 +629,8 @@ async def get_store(params: GetStoreInput) -> str:
         str: Detailed store information
     """
     try:
-        api_key = os.getenv('SYSTEMBOLAGET_API_KEY')
-        if not api_key:
-            return """⚠️  **API Configuration Required**
-
-To use this tool, you need to configure a Systembolaget API key:
-
-1. Obtain an API key from https://api-portal.systembolaget.se/
-2. Set the environment variable: `SYSTEMBOLAGET_API_KEY=your_key_here`
-
-This tool will retrieve detailed information for store: """ + params.store_id
+        # Get API key (automatically extracted from website)
+        api_key = await extract_api_key()
 
         headers = {
             'Ocp-Apim-Subscription-Key': api_key
