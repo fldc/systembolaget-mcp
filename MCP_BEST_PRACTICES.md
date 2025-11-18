@@ -19,12 +19,12 @@ Best practices för att bygga Model Context Protocol (MCP) servrar baserat på A
 
 **Exempel:**
 ```python
-# ❌ Dåligt: Bara en API wrapper
+# Dåligt: Bara en API wrapper
 @mcp.tool()
 async def get_product_raw(product_id: str):
     return await api.get(f"/products/{product_id}")
 
-# ✅ Bra: Workflow-orienterat verktyg
+# Bra: Workflow-orienterat verktyg
 @mcp.tool()
 async def search_products(params: SearchInput) -> str:
     """Search products with filters and return formatted results."""
@@ -266,9 +266,9 @@ try:
     result = await do_work()
     return result
 except APIError as e:
-    return f"❌ Error: {str(e)}"
+    return f"Error: {str(e)}"
 except Exception as e:
-    return f"❌ Unexpected error: {str(e)}"
+    return f"Unexpected error: {str(e)}"
 ```
 
 **Viktigt:**
@@ -281,14 +281,14 @@ except Exception as e:
 
 **Alla I/O-operationer ska vara async:**
 ```python
-# ✅ Korrekt
+# Korrekt
 @mcp.tool()
 async def search_products(params: SearchInput) -> str:
     api_key = await extract_api_key()
     data = await make_api_request(url, params, headers)
     return format_results(data)
 
-# ❌ Fel - blockerar event loop
+# Fel - blockerar event loop
 @mcp.tool()
 async def search_products(params: SearchInput) -> str:
     api_key = extract_api_key()  # BLOCKING!
@@ -648,16 +648,16 @@ logger.error(f"Failed to fetch data: {error}")
 
 ### Vanliga misstag att undvika:
 
-1. ❌ Skapa ett verktyg per API endpoint
-2. ❌ Returnera råa API-svar utan formatering
-3. ❌ Glömma pagination och character limits
-4. ❌ Hårdkoda credentials
-5. ❌ Logga till stdout istället för stderr
-6. ❌ Sakna proper error handling
-7. ❌ Ingen test-infrastructure
-8. ❌ Blockande I/O operationer
-9. ❌ Dåliga felmeddelanden
-10. ❌ Saknad dokumentation
+1. Skapa ett verktyg per API endpoint
+2. Returnera råa API-svar utan formatering
+3. Glömma pagination och character limits
+4. Hårdkoda credentials
+5. Logga till stdout istället för stderr
+6. Sakna proper error handling
+7. Ingen test-infrastructure
+8. Blockande I/O operationer
+9. Dåliga felmeddelanden
+10. Saknad dokumentation
 
 ## Referenser
 
